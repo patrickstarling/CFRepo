@@ -1,0 +1,53 @@
+name = "read-it-later"
+main = "src/index.ts"
+compatibility_date = "2025-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Static assets (the upload page)
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+# Workers AI (Llama for summary, MeloTTS for audio)
+[ai]
+binding = "AI"
+
+# Browser Rendering (URL ingest path showcase)
+[browser]
+binding = "BROWSER"
+
+# R2 buckets — uploads holds raw PDFs, articles holds extracted text + audio
+[[r2_buckets]]
+binding = "UPLOADS"
+bucket_name = "read-it-later-uploads"
+
+[[r2_buckets]]
+binding = "ARTICLES"
+bucket_name = "read-it-later-articles"
+
+# D1 — metadata, queryable
+[[d1_databases]]
+binding = "DB"
+database_name = "read-it-later"
+database_id = "REPLACE_WITH_YOUR_D1_ID"
+
+# Queue producer + consumer in the same Worker
+[[queues.producers]]
+binding = "QUEUE"
+queue = "articles-to-process"
+
+[[queues.consumers]]
+queue = "articles-to-process"
+max_batch_size = 1          # one article per invocation, keeps things simple
+max_batch_timeout = 5
+max_retries = 3
+dead_letter_queue = "articles-dlq"
+
+# Cron — daily digest email at 7am UTC
+[triggers]
+crons = ["0 7 * * *"]
+
+# Secrets to set via `wrangler secret put`:
+#   DIGEST_EMAIL_TO        — where to send the daily digest
+#   DIGEST_EMAIL_FROM      — sender address (must be a domain you've configured)
+#   PUBLIC_BASE_URL        — your deployed Worker URL, used in email links

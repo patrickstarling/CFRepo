@@ -1,0 +1,22 @@
+{
+  "name": "read-it-later",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:create": "wrangler d1 create read-it-later",
+    "db:migrate": "wrangler d1 migrations apply read-it-later --remote",
+    "db:migrate:local": "wrangler d1 migrations apply read-it-later --local",
+    "queue:create": "wrangler queues create articles-to-process && wrangler queues create articles-dlq",
+    "r2:create": "wrangler r2 bucket create read-it-later-uploads && wrangler r2 bucket create read-it-later-articles"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250401.0",
+    "typescript": "^5.4.0",
+    "wrangler": "^3.50.0"
+  },
+  "dependencies": {
+    "unpdf": "^0.11.0"
+  }
+}
