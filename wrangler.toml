@@ -25,12 +25,6 @@ bucket_name = "read-it-later-uploads"
 binding = "ARTICLES"
 bucket_name = "read-it-later-articles"
 
-# D1 — metadata, queryable
-[[d1_databases]]
-binding = "DB"
-database_name = "read-it-later"
-database_id = "REPLACE_WITH_YOUR_D1_ID"
-
 # Queue producer + consumer in the same Worker
 [[queues.producers]]
 binding = "QUEUE"
@@ -51,3 +45,8 @@ crons = ["0 7 * * *"]
 #   DIGEST_EMAIL_TO        — where to send the daily digest
 #   DIGEST_EMAIL_FROM      — sender address (must be a domain you've configured)
 #   PUBLIC_BASE_URL        — your deployed Worker URL, used in email links
+
+[[d1_databases]]
+binding = "read_it_later"
+database_name = "read-it-later"
+database_id = "3fc353e9-8ce6-49ed-8572-6d7fb5995430"
