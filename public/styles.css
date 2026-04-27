@@ -398,3 +398,131 @@ audio {
   overflow-y: auto;
   padding: 0.5rem 0.25rem;
 }
+
+
+.card-actions {
+  margin-left: auto;
+  display: inline-flex;
+  gap: 0.25rem;
+  align-items: center;
+}
+ 
+.action-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--fg-soft);
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 0.95rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.15s, color 0.15s, border-color 0.15s;
+}
+.action-btn:hover {
+  background: var(--bg-soft);
+  color: var(--fg);
+  border-color: var(--border);
+}
+.action-btn:disabled { opacity: 0.5; cursor: wait; }
+ 
+.delete-btn:hover {
+  background: #fdecea;
+  color: #c43c3c;
+  border-color: #f3c5c0;
+}
+@media (prefers-color-scheme: dark) {
+  .delete-btn:hover { background: #3a1c1c; color: #f5a8a8; border-color: #663030; }
+}
+ 
+.share-btn:hover { color: var(--accent); border-color: var(--accent); }
+ 
+/* ─── Related panel ────────────────────────────────────────────────────────── */
+ 
+.related {
+  margin-top: 0.85rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.85rem;
+}
+.related h3 {
+  margin: 0 0 0.5rem;
+  font-family: var(--font-serif);
+  font-weight: 500;
+  font-size: 0.95rem;
+  color: var(--fg-muted);
+}
+.related-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+.related-list li {
+  background: var(--bg-soft);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.85rem;
+}
+.related-list strong {
+  font-family: var(--font-serif);
+  font-weight: 500;
+  color: var(--fg);
+  display: block;
+  margin-bottom: 0.15rem;
+}
+.related-list p {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+  line-height: 1.5;
+}
+ 
+/* ─── Sort form (already exists; only add this block if you don't have it) ── */
+ 
+.page-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+.page-meta .page-sub { margin: 0; }
+ 
+.sort-form select {
+  font: inherit;
+  padding: 0.3rem 0.5rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--fg);
+  cursor: pointer;
+}
+.sort-form label {
+  font-size: 0.9rem;
+  color: var(--fg-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+ 
+/* ─── Shared article view (public, no auth) ────────────────────────────────── */
+ 
+.share-tag {
+  margin-left: auto;
+  font-size: 0.8rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  background: var(--accent-bg);
+  color: var(--accent-fg);
+  font-weight: 500;
+}
+.share-card h1 {
+  font-family: var(--font-serif);
+  font-weight: 500;
+  font-size: 1.6rem;
+  margin: 0 0 0.5rem;
+  letter-spacing: -0.005em;
+}

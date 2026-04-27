@@ -50,3 +50,7 @@ crons = ["0 7 * * *"]
 binding = "DB"
 database_name = "read-it-later"
 database_id = "3fc353e9-8ce6-49ed-8572-6d7fb5995430"
+
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "read-it-later"
