@@ -41,11 +41,8 @@ export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(req.url);
 
-    // Healthcheck stays unauthenticated so monitors can ping it.
     if (url.pathname === "/healthz") return new Response("ok");
 
-    // Trust Cloudflare Access. If this header is missing, Access isn't in
-    // front of the Worker — refuse rather than serve unauthenticated traffic.
     const userEmail = req.headers.get("cf-access-authenticated-user-email");
     if (!userEmail) {
       return new Response("Unauthorized — Cloudflare Access not configured.", { status: 401 });
@@ -57,7 +54,6 @@ export default {
     if (req.method === "GET"  && url.pathname === "/search")   return search(url, env, userEmail);
     if (req.method === "GET"  && url.pathname.startsWith("/audio/")) return serveAudio(url, env, userEmail);
 
-    // Everything else falls through to the static upload page.
     return env.ASSETS.fetch(req);
   },
 
@@ -101,7 +97,7 @@ async function saveUrl(req: Request, env: Env, userEmail: string): Promise<Respo
   const id = crypto.randomUUID();
   await env.DB.prepare(
     `INSERT INTO articles (id, user_email, source_type, source_ref, normalized_ref, status)
-    VALUES (?, ?, 'url', ?, ?, 'pending')`
+     VALUES (?, ?, 'url', ?, ?, 'pending')`
   ).bind(id, userEmail, url, normalizedUrl).run();
 
   await env.QUEUE.send({ id, user_email: userEmail, source_type: "url", url });
@@ -117,12 +113,15 @@ async function savePdf(req: Request, env: Env, userEmail: string): Promise<Respo
     return json({ error: "expected multipart field 'pdf' with a PDF file" }, 400);
   }
 
+  // Match on normalized title so 'Foo.pdf' and 'Foo (1).pdf' are caught here,
+  // not just at the consumer step.
+  const normalizedTitle = normalizeTitle(file.name);
   const existing = await env.DB.prepare(
     `SELECT id FROM articles
-      WHERE user_email=? AND source_type='pdf' AND title=?
+      WHERE user_email=? AND source_type='pdf' AND normalized_title=?
         AND status IN ('done','processing','pending')
       LIMIT 1`
-  ).bind(userEmail, file.name).first<{ id: string }>();
+  ).bind(userEmail, normalizedTitle).first<{ id: string }>();
   if (existing) return json({ id: existing.id, status: "duplicate" }, 200);
 
   const id = crypto.randomUUID();
@@ -133,10 +132,10 @@ async function savePdf(req: Request, env: Env, userEmail: string): Promise<Respo
     customMetadata: { originalName: file.name, userEmail },
   });
 
- await env.DB.prepare(
-  `INSERT INTO articles (id, user_email, source_type, source_ref, title, normalized_title, status)
-   VALUES (?, ?, 'pdf', ?, ?, ?, 'pending')`
-).bind(id, userEmail, uploadKey, file.name, normalizeTitle(file.name), userEmail).run();
+  await env.DB.prepare(
+    `INSERT INTO articles (id, user_email, source_type, source_ref, title, normalized_title, status)
+     VALUES (?, ?, 'pdf', ?, ?, ?, 'pending')`
+  ).bind(id, userEmail, uploadKey, file.name, normalizedTitle, "pending").run();
 
   await env.QUEUE.send({ id, user_email: userEmail, source_type: "pdf", uploadKey, filename: file.name });
   return json({ id, status: "queued" }, 202);
@@ -157,13 +156,13 @@ async function processJob(job: QueueJob, env: Env): Promise<void> {
     throw new Error(`extracted text too short (${text?.length ?? 0} chars) — likely a parse failure`);
   }
 
-    // Title-based dedup, scoped to this user.
   const normalizedTitle = normalizeTitle(title);
-  // Race-condition safety: also catch siblings that are 'processing' if they
-  // started slightly before us (their title is now in the DB).
+
+  // Title-based dedup, scoped to this user. Race-condition safety: also catch
+  // siblings that are 'processing' if they finished their audio just before us.
   const dup = await env.DB.prepare(
     `SELECT id, summary, text_key, audio_key, audio_seconds
-      FROM articles
+       FROM articles
       WHERE user_email=? AND status IN ('done', 'processing')
         AND normalized_title=? AND id != ?
         AND audio_key IS NOT NULL
@@ -176,7 +175,7 @@ async function processJob(job: QueueJob, env: Env): Promise<void> {
   if (dup) {
     await env.DB.prepare(
       `UPDATE articles
-          SET title=?,  normalizeTitle=?, summary=?, text_key=?, audio_key=?, audio_seconds=?,
+          SET title=?, normalized_title=?, summary=?, text_key=?, audio_key=?, audio_seconds=?,
               status='done', error='duplicate of ' || ?, updated_at=unixepoch()
         WHERE id=?`
     ).bind(title, normalizedTitle, dup.summary, dup.text_key, dup.audio_key, dup.audio_seconds, dup.id, job.id).run();
@@ -198,10 +197,10 @@ async function processJob(job: QueueJob, env: Env): Promise<void> {
 
   await env.DB.prepare(
     `UPDATE articles
-        SET title=?, normalizeTitle=?, summary=?, text_key=?, audio_key=?, audio_seconds=?,
+        SET title=?, normalized_title=?, summary=?, text_key=?, audio_key=?, audio_seconds=?,
             status='done', updated_at=unixepoch()
       WHERE id=?`
-  ).bind(title, normalizeTitle, summary, textKey, audioKey, audioSeconds, job.id).run();
+  ).bind(title, normalizedTitle, summary, textKey, audioKey, audioSeconds, job.id).run();
 }
 
 async function fetchViaBrowserRendering(targetUrl: string, env: Env): Promise<{ title: string; text: string }> {
@@ -566,16 +565,18 @@ function escapeHtml(s: string): string {
   }[c]!));
 }
 
+/**
+ * Normalize a URL for dedup matching: lowercase host, strip tracking params,
+ * strip fragment, strip trailing punctuation.
+ */
 function normalizeUrl(raw: string): string {
   try {
     const u = new URL(raw.trim().replace(/[;,\s]+$/, ""));
     u.hash = "";
     u.hostname = u.hostname.toLowerCase();
-    // Strip well-known tracking params
     const drop = ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
                   "ref", "ref_src", "ref_url", "fbclid", "gclid", "mc_cid", "mc_eid"];
     for (const k of drop) u.searchParams.delete(k);
-    // Strip trailing slash on the path (but not for root "/")
     if (u.pathname.length > 1 && u.pathname.endsWith("/")) {
       u.pathname = u.pathname.slice(0, -1);
     }
@@ -585,11 +586,15 @@ function normalizeUrl(raw: string): string {
   }
 }
 
-
+/**
+ * Normalize a title for dedup matching: lowercase, strip site suffixes,
+ * strip "(1)" / "(2)" copies, drop file extensions, collapse whitespace.
+ */
 function normalizeTitle(raw: string): string {
   return (raw || "")
     .toLowerCase()
-    // Strip everything after a separator (em-dash, en-dash, hyphen, pipe) preceded by space
+    .replace(/\.pdf$/i, "")
+    .replace(/\s*\(\d+\)\s*$/, "")
     .replace(/\s+[—–\-|]\s+.*$/, "")
     .replace(/\s+/g, " ")
     .trim();
