@@ -1,4 +1,5 @@
 import { extractText, getDocumentProxy } from "unpdf";
+import puppeteer from "@cloudflare/puppeteer";
 
 export interface Env {
   AI: Ai;
@@ -149,16 +150,15 @@ async function processJob(job: QueueJob, env: Env): Promise<void> {
 // after JS execution, which is exactly what we need for modern article sites.
 
 async function fetchViaBrowserRendering(targetUrl: string, env: Env): Promise<{ title: string; text: string }> {
-  const resp = await env.BROWSER.fetch("https://browser-rendering.api/content", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ url: targetUrl, waitUntil: "networkidle0" }),
-  });
-
-  if (!resp.ok) throw new Error(`browser rendering failed: ${resp.status} ${await resp.text()}`);
-  const html = await resp.text();
-
-  return extractReadableContent(html, targetUrl);
+  const browser = await puppeteer.launch(env.BROWSER as any);
+  try {
+    const page = await browser.newPage();
+    await page.goto(targetUrl, { waitUntil: "networkidle0", timeout: 30000 });
+    const html = await page.content();
+    return extractReadableContent(html, targetUrl);
+  } finally {
+    await browser.close();
+  }
 }
 
 // Tiny, dependency-free reader. Strips scripts/styles/nav, picks the densest
@@ -249,8 +249,23 @@ Return ONLY the JSON object, no markdown fences, no preamble.`;
 
   // Llama on Workers AI is generally well-behaved with "return only JSON",
   // but defend against the occasional ```json fence anyway.
-  const cleaned = resp.response.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
-  const parsed = JSON.parse(cleaned) as { summary: string; script: string };
+const cleaned = resp.response.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
+let parsed: { summary: string; script: string };
+try {
+  parsed = JSON.parse(cleaned);
+} catch {
+  // Llama sometimes emits unescaped quotes inside string values. As a fallback,
+  // ask it to repair its own output with strict JSON-only constraints.
+  const repair = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+    messages: [{
+      role: "user",
+      content: `The following text was supposed to be JSON with fields "summary" and "script" but failed to parse. Return ONLY valid JSON with those two fields, properly escaping any quotes or newlines in the string values. No markdown, no preamble.\n\n${cleaned}`,
+    }],
+    max_tokens: 4096,
+  }) as { response: string };
+  const repaired = repair.response.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
+  parsed = JSON.parse(repaired);
+}
 
   if (!parsed.summary || !parsed.script) throw new Error("LLM did not return both summary and script");
   return parsed;
