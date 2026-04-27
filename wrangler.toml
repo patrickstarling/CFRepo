@@ -47,6 +47,6 @@ crons = ["0 7 * * *"]
 #   PUBLIC_BASE_URL        — your deployed Worker URL, used in email links
 
 [[d1_databases]]
-binding = "read_it_later"
+binding = "DB"
 database_name = "read-it-later"
 database_id = "3fc353e9-8ce6-49ed-8572-6d7fb5995430"
