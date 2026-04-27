@@ -89,19 +89,20 @@ async function saveUrl(req: Request, env: Env, userEmail: string): Promise<Respo
     return json({ error: "valid http(s) url required" }, 400);
   }
 
+  const normalizedUrl = normalizeUrl(url);
   const existing = await env.DB.prepare(
     `SELECT id FROM articles
-      WHERE user_email=? AND source_type='url' AND source_ref=?
+      WHERE user_email=? AND source_type='url' AND normalized_ref=?
         AND status IN ('done','processing','pending')
       LIMIT 1`
-  ).bind(userEmail, url).first<{ id: string }>();
+  ).bind(userEmail, normalizedUrl).first<{ id: string }>();
   if (existing) return json({ id: existing.id, status: "duplicate" }, 200);
 
   const id = crypto.randomUUID();
   await env.DB.prepare(
-    `INSERT INTO articles (id, user_email, source_type, source_ref, status)
-     VALUES (?, ?, 'url', ?, 'pending')`
-  ).bind(id, userEmail, url).run();
+    `INSERT INTO articles (id, user_email, source_type, source_ref, normalized_ref, status)
+    VALUES (?, ?, 'url', ?, ?, 'pending')`
+  ).bind(id, userEmail, url, normalizedUrl).run();
 
   await env.QUEUE.send({ id, user_email: userEmail, source_type: "url", url });
   return json({ id, status: "queued" }, 202);
@@ -132,10 +133,10 @@ async function savePdf(req: Request, env: Env, userEmail: string): Promise<Respo
     customMetadata: { originalName: file.name, userEmail },
   });
 
-  await env.DB.prepare(
-    `INSERT INTO articles (id, user_email, source_type, source_ref, title, status)
-     VALUES (?, ?, 'pdf', ?, ?, 'pending')`
-  ).bind(id, userEmail, uploadKey, file.name).run();
+ await env.DB.prepare(
+  `INSERT INTO articles (id, user_email, source_type, source_ref, title, normalized_title, status)
+   VALUES (?, ?, 'pdf', ?, ?, ?, 'pending')`
+).bind(id, userEmail, uploadKey, file.name, normalizeTitle(file.name), userEmail).run();
 
   await env.QUEUE.send({ id, user_email: userEmail, source_type: "pdf", uploadKey, filename: file.name });
   return json({ id, status: "queued" }, 202);
@@ -156,23 +157,29 @@ async function processJob(job: QueueJob, env: Env): Promise<void> {
     throw new Error(`extracted text too short (${text?.length ?? 0} chars) — likely a parse failure`);
   }
 
-  // Title-based dedup, scoped to this user.
+    // Title-based dedup, scoped to this user.
+  const normalizedTitle = normalizeTitle(title);
+  // Race-condition safety: also catch siblings that are 'processing' if they
+  // started slightly before us (their title is now in the DB).
   const dup = await env.DB.prepare(
     `SELECT id, summary, text_key, audio_key, audio_seconds
-       FROM articles
-      WHERE user_email=? AND status='done' AND title=? AND id != ?
+      FROM articles
+      WHERE user_email=? AND status IN ('done', 'processing')
+        AND normalized_title=? AND id != ?
+        AND audio_key IS NOT NULL
+      ORDER BY created_at ASC
       LIMIT 1`
-  ).bind(job.user_email, title, job.id).first<{
+  ).bind(job.user_email, normalizedTitle, job.id).first<{
     id: string; summary: string; text_key: string; audio_key: string; audio_seconds: number;
   }>();
 
   if (dup) {
     await env.DB.prepare(
       `UPDATE articles
-          SET title=?, summary=?, text_key=?, audio_key=?, audio_seconds=?,
+          SET title=?,  normalizeTitle=?, summary=?, text_key=?, audio_key=?, audio_seconds=?,
               status='done', error='duplicate of ' || ?, updated_at=unixepoch()
         WHERE id=?`
-    ).bind(title, dup.summary, dup.text_key, dup.audio_key, dup.audio_seconds, dup.id, job.id).run();
+    ).bind(title, normalizedTitle, dup.summary, dup.text_key, dup.audio_key, dup.audio_seconds, dup.id, job.id).run();
     return;
   }
 
@@ -191,10 +198,10 @@ async function processJob(job: QueueJob, env: Env): Promise<void> {
 
   await env.DB.prepare(
     `UPDATE articles
-        SET title=?, summary=?, text_key=?, audio_key=?, audio_seconds=?,
+        SET title=?, normalizeTitle=?, summary=?, text_key=?, audio_key=?, audio_seconds=?,
             status='done', updated_at=unixepoch()
       WHERE id=?`
-  ).bind(title, summary, textKey, audioKey, audioSeconds, job.id).run();
+  ).bind(title, normalizeTitle, summary, textKey, audioKey, audioSeconds, job.id).run();
 }
 
 async function fetchViaBrowserRendering(targetUrl: string, env: Env): Promise<{ title: string; text: string }> {
@@ -557,4 +564,33 @@ function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, c => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   }[c]!));
+}
+
+function normalizeUrl(raw: string): string {
+  try {
+    const u = new URL(raw.trim().replace(/[;,\s]+$/, ""));
+    u.hash = "";
+    u.hostname = u.hostname.toLowerCase();
+    // Strip well-known tracking params
+    const drop = ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+                  "ref", "ref_src", "ref_url", "fbclid", "gclid", "mc_cid", "mc_eid"];
+    for (const k of drop) u.searchParams.delete(k);
+    // Strip trailing slash on the path (but not for root "/")
+    if (u.pathname.length > 1 && u.pathname.endsWith("/")) {
+      u.pathname = u.pathname.slice(0, -1);
+    }
+    return u.toString();
+  } catch {
+    return raw.trim();
+  }
+}
+
+
+function normalizeTitle(raw: string): string {
+  return (raw || "")
+    .toLowerCase()
+    // Strip everything after a separator (em-dash, en-dash, hyphen, pipe) preceded by space
+    .replace(/\s+[—–\-|]\s+.*$/, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
