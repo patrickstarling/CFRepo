@@ -260,55 +260,59 @@ async function extractFromPdf(uploadKey: string, env: Env): Promise<{ title: str
   const { text } = await extractText(pdf, { mergePages: true });
   return { title, text: typeof text === "string" ? text : (text as string[]).join("\n\n") };
 }
-
 async function summarizeAndScript(
   fullText: string,
   title: string,
   env: Env,
 ): Promise<{ summary: string; script: string }> {
+  // Step 1: Build the script deterministically — no LLM, no compression risk.
+  const script = prepareForTts(fullText);
+
+  // Step 2: Generate ONLY the summary via LLM. Short prompt, short response.
   const trimmed = fullText.slice(0, 12_000);
+  const summaryResp = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+    messages: [{
+      role: "user",
+      content: `Summarize the following article in 2-3 neutral sentences. Return ONLY the summary text, no preamble, no markdown, no quotes.
 
-  const prompt = `You are preparing an article to be read aloud by a text-to-speech engine.
+Title: ${title}
 
-Article title: ${title}
-
-Article text:
+Article:
 """
 ${trimmed}
-"""
-
-Return a JSON object with exactly two fields:
-  - "summary": a 2-3 sentence neutral summary of the article.
-  - "script": the article rewritten for natural narration. Expand abbreviations,
-    spell out numbers and acronyms when ambiguous, remove markdown and inline
-    citations, and use short sentences. Aim for roughly the same length as the
-    source. Do not add commentary, intro, or sign-off.
-
-Return ONLY the JSON object, no markdown fences, no preamble.`;
-
-  const resp = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
-    messages: [{ role: "user", content: prompt }],
-    max_tokens: 4096,
+"""`,
+    }],
+    max_tokens: 300,
   }) as { response: string };
 
-  const cleaned = resp.response.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
-  let parsed: { summary: string; script: string };
-  try {
-    parsed = JSON.parse(cleaned);
-  } catch {
-    const repair = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
-      messages: [{
-        role: "user",
-        content: `The following text was supposed to be JSON with fields "summary" and "script" but failed to parse. Return ONLY valid JSON with those two fields, properly escaping any quotes or newlines in the string values. No markdown, no preamble.\n\n${cleaned}`,
-      }],
-      max_tokens: 4096,
-    }) as { response: string };
-    const repaired = repair.response.replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
-    parsed = JSON.parse(repaired);
-  }
+  const summary = summaryResp.response.trim().replace(/^["']|["']$/g, "");
 
-  if (!parsed.summary || !parsed.script) throw new Error("LLM did not return both summary and script");
-  return parsed;
+  if (!summary) throw new Error("LLM did not return a summary");
+  return { summary, script };
+}
+
+/**
+ * Prepare extracted article text for narration. Light deterministic edits only —
+ * never compresses or rewrites content. The output is read verbatim by MeloTTS.
+ */
+function prepareForTts(text: string): string {
+  return text
+    // Strip inline URLs (TTS reading "h-t-t-p-s-colon-slash-slash" is awful).
+    .replace(/https?:\/\/\S+/g, "link")
+    // Strip bracketed citation markers like [1], [12], [citation needed].
+    .replace(/\[[^\]]{1,30}\]/g, "")
+    // Convert symbols that read poorly.
+    .replace(/&/g, " and ")
+    .replace(/%/g, " percent")
+    .replace(/\$(\d)/g, "$1 dollars")
+    // Convert markdown emphasis markers into nothing.
+    .replace(/[*_`#>]/g, "")
+    // Collapse newlines into sentence-friendly pauses.
+    .replace(/\n{2,}/g, ". ")
+    .replace(/\n/g, " ")
+    // Collapse whitespace.
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 async function synthesizeAudio(script: string, env: Env): Promise<Uint8Array> {
