@@ -26,7 +26,7 @@
     <section class="page">
       <header class="page-header">
         <h1>Save something to read later</h1>
-        <p class="page-sub">Paste a link or drop a PDF. We'll extract, summarize, and read it aloud.</p>
+        <p class="page-sub">Paste a link or upload a PDF. We'll extract, summarize, and read it aloud.</p>
       </header>
 
       <div class="add-grid">
@@ -41,9 +41,9 @@
 
         <section class="card add-card">
           <h2>From a PDF</h2>
-          <p class="hint">Drop multiple files — they'll process in parallel.</p>
+          <p class="hint">Upload multiple files — they'll process in parallel.</p>
           <div class="drop" id="drop">
-            <p>Drop PDFs here</p>
+            <p>Upload PDFs here</p>
             <p class="hint-sm">or <label class="link" style="cursor:pointer">choose files<input type="file" id="files" accept="application/pdf" multiple hidden></label></p>
           </div>
         </section>
@@ -90,7 +90,7 @@ document.getElementById('save-url').addEventListener('click', async () => {
     });
     const data = await r.json();
     if (r.ok) {
-      const tag = data.status === 'duplicate' ? '↺ already saved' : '✓ queued';
+      const tag = data.status === 'duplicate' ? '↺ already saved' : '✓ transcribed';
       write(`  ${tag} (${data.id.slice(0, 8)}…)`);
       if (data.status !== 'duplicate') input.value = '';
     } else {
@@ -126,7 +126,7 @@ async function upload(fileList) {
       const r = await fetch('/save-pdf', { method: 'POST', body: fd });
       const data = await r.json();
       if (r.ok) {
-        const tag = data.status === 'duplicate' ? '↺ already saved' : '✓ queued';
+        const tag = data.status === 'duplicate' ? '↺ already saved' : '✓ transcribed';
         write(`  ${tag} (${data.id.slice(0, 8)}…)`);
       } else {
         write(`  ✗ ${data.error || r.status}`);

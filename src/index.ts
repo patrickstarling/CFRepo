@@ -53,6 +53,8 @@ export default {
     if (req.method === "GET"  && url.pathname === "/library")  return library(env, userEmail);
     if (req.method === "GET"  && url.pathname === "/search")   return search(url, env, userEmail);
     if (req.method === "GET"  && url.pathname.startsWith("/audio/")) return serveAudio(url, env, userEmail);
+    if (req.method === "GET"  && url.pathname.startsWith("/audio/")) return serveAudio(url, env, userEmail);
+    if (req.method === "GET"  && url.pathname.startsWith("/text/"))  return serveText(url, env, userEmail);
 
     return env.ASSETS.fetch(req);
   },
@@ -134,8 +136,8 @@ async function savePdf(req: Request, env: Env, userEmail: string): Promise<Respo
 
   await env.DB.prepare(
     `INSERT INTO articles (id, user_email, source_type, source_ref, title, normalized_title, status)
-     VALUES (?, ?, 'pdf', ?, ?, ?, 'pending')`
-  ).bind(id, userEmail, uploadKey, file.name, normalizedTitle, "pending").run();
+    VALUES (?, ?, 'pdf', ?, ?, ?, 'pending')`
+  ).bind(id, userEmail, uploadKey, file.name, normalizedTitle).run();
 
   await env.QUEUE.send({ id, user_email: userEmail, source_type: "pdf", uploadKey, filename: file.name });
   return json({ id, status: "queued" }, 202);
@@ -363,12 +365,32 @@ async function serveAudio(url: URL, env: Env, userEmail: string): Promise<Respon
       `UPDATE articles SET played_at=unixepoch() WHERE id=? AND user_email=?`
     ).bind(id, userEmail).run();
   }
+  
 
   return new Response(obj.body, {
     headers: {
       "content-type": "audio/mpeg",
       "cache-control": "private, max-age=3600",
       "accept-ranges": "bytes",
+    },
+  });
+}
+
+async function serveText(url: URL, env: Env, userEmail: string): Promise<Response> {
+  const id = url.pathname.split("/")[2];
+  const row = await env.DB.prepare(
+    `SELECT text_key FROM articles WHERE id=? AND user_email=? AND status='done'`
+  ).bind(id, userEmail).first<{ text_key: string }>();
+
+  if (!row) return new Response("not found", { status: 404 });
+
+  const obj = await env.ARTICLES.get(row.text_key);
+  if (!obj) return new Response("text missing", { status: 404 });
+
+  return new Response(obj.body, {
+    headers: {
+      "content-type": "text/plain; charset=utf-8",
+      "cache-control": "private, max-age=3600",
     },
   });
 }
@@ -424,17 +446,21 @@ function renderLibrary(rows: ArticleRow[], userEmail: string, query: string): Re
     const titleHtml = highlight(escapeHtml(r.title ?? "(untitled)"), query);
     const summaryHtml = highlight(escapeHtml(r.summary ?? ""), query);
     return `<article class="card ${playedClass}">
-      <header>
-        <h2>${titleHtml}</h2>
-        <p class="meta">
-          <span class="chip chip-${r.source_type}">${sourceChip}</span>
-          <span>~${minutes} min</span>
-          ${r.played_at ? `<span class="dot">·</span><span>played</span>` : ""}
-        </p>
-      </header>
-      <p class="summary">${summaryHtml}</p>
-      <audio controls preload="none" src="/audio/${r.id}"></audio>
-    </article>`;
+    <header>
+      <h2>${titleHtml}</h2>
+      <p class="meta">
+        <span class="chip chip-${r.source_type}">${sourceChip}</span>
+        <span>~${minutes} min</span>
+        ${r.played_at ? `<span class="dot">·</span><span>played</span>` : ""}
+      </p>
+    </header>
+    <p class="summary">${summaryHtml}</p>
+    <audio controls preload="none" src="/audio/${r.id}"></audio>
+    <details class="transcript" data-id="${r.id}">
+      <summary>Show transcript</summary>
+      <div class="transcript-body">Loading…</div>
+    </details>
+  </article>`;
   }).join("");
 
   const empty = query
@@ -499,6 +525,22 @@ function layout(o: LayoutOpts): string {
     <div class="user" title="${escapeHtml(o.userEmail)}">${escapeHtml(o.userEmail.split("@")[0])}</div>
   </header>
   <main>${o.body}</main>
+  <script>
+document.addEventListener('toggle', async (ev) => {
+  const det = ev.target;
+  if (!det.matches('details.transcript') || !det.open) return;
+  const body = det.querySelector('.transcript-body');
+  if (body.dataset.loaded) return;
+  body.dataset.loaded = '1';
+  try {
+    const r = await fetch('/text/' + det.dataset.id);
+    if (!r.ok) throw new Error('failed to load (' + r.status + ')');
+    body.textContent = await r.text();
+  } catch (err) {
+    body.textContent = 'Could not load transcript: ' + err.message;
+  }
+}, true);
+</script>
 </body>
 </html>`;
 }
